@@ -84,7 +84,7 @@ Importez `java.util.concurrent.CompletionStage` et `CompletableFuture`.
 Le producteur appelle sa référence `@ProducedComponentEvents` normalement :
 
 ```java
-events.greeted("Alice").whenComplete((ignored, failure) -> {
+events.greeted("Alice").whenComplete((_, failure) -> {
     if (failure != null) {
         // Traiter l'échec de diffusion.
     }

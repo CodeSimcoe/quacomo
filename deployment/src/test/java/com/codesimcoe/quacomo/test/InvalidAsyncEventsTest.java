@@ -10,13 +10,21 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class InvalidAsyncEventsTest {
-    @RegisterExtension
-    static final QuarkusExtensionTest app = new QuarkusExtensionTest()
-            .setArchiveProducer(() -> ShrinkWrap.create(JavaArchive.class).addClasses(Events.class))
-            .assertException(t -> {
-                while (t.getCause() != null) t = t.getCause();
-                assertTrue(t.getMessage().contains("Event methods must return void or CompletionStage<Void>"));
-            });
-    @Test void rejectsAsyncReturnValue() { }
-    @ComponentEvents public interface Events { CompletionStage<String> invalid(); }
+  @RegisterExtension
+  static final QuarkusExtensionTest app = new QuarkusExtensionTest()
+    .setArchiveProducer(() -> ShrinkWrap.create(JavaArchive.class).addClasses(Events.class))
+    .assertException(t -> {
+      while (t.getCause() != null) {
+        t = t.getCause();
+      }
+      assertTrue(t.getMessage().contains("Event methods must return void or CompletionStage<Void>"));
+    });
+
+  @Test
+  void rejectsAsyncReturnValue() {}
+
+  @ComponentEvents
+  public interface Events {
+    CompletionStage<String> invalid();
+  }
 }

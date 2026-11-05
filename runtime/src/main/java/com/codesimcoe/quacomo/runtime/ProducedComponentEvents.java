@@ -12,9 +12,7 @@ import jakarta.inject.Qualifier;
  * through the returned stage without cancelling other deliveries.
  */
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ ElementType.FIELD, ElementType.TYPE })
+@Target({ElementType.FIELD, ElementType.TYPE})
 @Qualifier
 public @interface ProducedComponentEvents {
 }
-
-
