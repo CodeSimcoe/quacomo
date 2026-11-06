@@ -66,7 +66,22 @@ class QuacomoProcessor {
     return new AnnotationsTransformerBuildItem(AnnotationTransformation
       .forFields()
       .when(field -> field.hasAnnotation(USED) || field.hasAnnotation(PRODUCED))
-      .transform(context -> context.add(Inject.class))
+      .transform(context -> {
+        context.add(Inject.class);
+        FieldInfo field = context.declaration().asField();
+        AnnotationInstance binding = field.annotation(USED);
+        if (binding == null) {
+          binding = field.annotation(PRODUCED);
+        }
+        if (field.hasAnnotation(PRODUCED)
+            || (binding.value("remote") != null && !binding.value("remote").asString().isEmpty())) {
+          context.add(AnnotationInstance
+            .builder(com.codesimcoe.quacomo.runtime.RemoteBinding.class)
+            .value(binding.value("remote") == null ? "" : binding.value("remote").asString())
+            .build()
+          );
+        }
+      })
     );
   }
 
@@ -114,7 +129,14 @@ class QuacomoProcessor {
             contract != null && contract.hasAnnotation(marker.equals(USED) ? SERVICES : EVENTS),
             "Missing contract annotation for " + field
         );
-        if (marker.equals(USED)) {
+        boolean remote = annotation.value("remote") != null && !annotation.value("remote").asString().isEmpty();
+        if (remote) {
+          require(
+              contract.hasAnnotation(DotName.createSimple(com.codesimcoe.quacomo.runtime.Remotable.class)),
+              "Remote binding requires @Remotable: " + field
+          );
+        }
+        if (marker.equals(USED) && !remote) {
           require(
               components(index, contract).size() == 1,
               "Expected exactly one component providing " + contract.name() + " for " + field
@@ -133,6 +155,7 @@ class QuacomoProcessor {
         .build()) {
         creator.addAnnotation(Singleton.class);
         creator.addAnnotation(ProducedComponentEvents.class);
+        creator.addAnnotation(com.codesimcoe.quacomo.runtime.RemoteBinding.class).addValue("value", "");
         Map<String, MethodInfo> methods = new LinkedHashMap<>();
         collectMethods(index, contract, methods);
         FieldDescriptor executor = null;

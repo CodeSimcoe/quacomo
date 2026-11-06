@@ -109,3 +109,164 @@ et `CompletionStage<Void>` peuvent coexister dans la même interface.
 Exécuter les tests de l'extension depuis la racine : `mvn test`.
 
 
+
+## Cross-JVM calls with HTTP remoting
+
+Add the optional extension to each application that sends or receives remote calls:
+
+```xml
+<dependency>
+    <groupId>com.codesimcoe.quacomo</groupId>
+    <artifactId>quacomo-remoting</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+</dependency>
+```
+
+Local-only applications can continue depending on `quacomo`; no HTTP dependency
+is added to the core extension.
+
+### Contracts and bindings
+
+`@Remotable` is a marker with **no id or version attributes**. The fully qualified
+interface name identifies the contract. Method names, parameter types and return
+types identify operations, including inherited methods and overloads. Renaming a
+contract or changing a signature changes its wire identity; both sides must use
+compatible contracts. DTO schemas are not negotiated or versioned in this release.
+
+Publish a shared contracts JAR containing interfaces and DTOs, without component
+implementations. Ensure it is indexed by Quarkus (a Jandex index, `beans.xml`, or
+`quarkus.index-dependency` configuration).
+
+```java
+@Remotable
+@ComponentServices
+public interface Inventory {
+    CompletionStage<Stock> getStock(ProductId product);
+}
+
+public record ProductId(String value) {}
+public record Stock(int available) {}
+
+@Remotable
+@ComponentEvents
+public interface OrderEvents {
+    CompletionStage<Void> orderPlaced(OrderPlaced event);
+}
+
+public record OrderPlaced(String orderId, List<String> products) {}
+```
+
+Each public type belongs in its own Java file. All remote methods must return
+`CompletionStage<T>`; remote events specifically return `CompletionStage<Void>`.
+Synchronous remote calls and generic contract/method declarations are rejected
+at build time.
+
+On JVM A, inject explicit named remote bindings:
+
+```java
+@Component
+public class Checkout {
+    @UsedComponentServices(remote = "warehouse")
+    Inventory inventory;
+
+    @ProducedComponentEvents(remote = "fulfilment")
+    OrderEvents events;
+}
+```
+
+```properties
+# JVM A: URLs can use normal hostnames or Kubernetes Service DNS names.
+quacomo.remote.destinations.warehouse.url=https://warehouse:8443
+quacomo.remote.destinations.warehouse.token=${WAREHOUSE_TOKEN}
+quacomo.remote.destinations.fulfilment.url=https://fulfilment:8443
+quacomo.remote.destinations.fulfilment.token=${FULFILMENT_TOKEN}
+```
+
+On the receiving JVM, implement the interfaces with ordinary `@Component`
+classes. Explicitly allowlist the contracts and configure a nonempty bearer token:
+
+```properties
+# JVM B: replace these names with your contracts' fully qualified Java names.
+quacomo.remote.exports=com.example.Inventory,com.example.OrderEvents
+quacomo.remote.server.token=${REMOTING_TOKEN}
+```
+
+Incoming requests use `POST /quacomo/remote` on the normal Quarkus HTTP server.
+The configured destination base URL includes any HTTP root path. With no server
+token, requests are rejected; with no exports, no operation is exposed. Use HTTPS
+for traffic outside a trusted development environment. Configure the receiving
+Quarkus HTTP server's TLS normally. The client uses the JVM's default trust store
+and validates certificates and hostnames; custom client TLS registries/mTLS are
+not implemented yet. Bearer-token authorization currently applies to the whole
+export allowlist, not individual contracts.
+
+Leaving `remote` empty retains local injection/delivery. Remote bindings never
+fall back to local providers, even if an implementation also exists in the same
+JVM. A client application needs no local service implementation. Existing direct
+local services can still be synchronous and local events can still return `void`.
+
+### Delivery and failures
+
+A remote service invokes one configured destination. A remote event can fan out
+to several named destinations:
+
+```java
+@ProducedComponentEvents(remote = "billing,audit")
+OrderEvents events;
+```
+
+Each destination receives one HTTP request. Its local event dispatcher invokes
+all local subscribers; it does not forward the received event to remote bindings.
+The returned stage waits for every configured destination and its subscriber
+stages. One failure makes the aggregate fail without cancelling other deliveries.
+Calling a load-balanced Kubernetes Service delivers to one selected pod, not every
+pod. To broadcast to multiple destinations, name them explicitly. Remote events
+without local subscribers complete successfully.
+
+Calls are transient request/reply exchanges: no retries, persistent queues, replay,
+ordering guarantees or exactly-once guarantee. Timeout or disconnection does not
+prove the receiver did not execute the operation. Cancelling a caller's stage does
+not undo remote work. Arguments cross the wire by value; no component references,
+Java exceptions, transaction context or CDI request context are transported.
+
+Remote execution failures use `RemoteCallException` with code
+`REMOTE_EXECUTION_FAILED`; exception messages/stacks remain on the receiver.
+Protocol/HTTP errors and missing destination configuration fail the returned
+stage. Network errors and timeouts retain their underlying asynchronous transport
+exception. The API does not serialize arbitrary Java exception subclasses.
+
+### Serialization and limits
+
+JSON supports primitives/wrappers, strings, UUIDs, public enums, indexed public
+records, `List<T>` and `Map<String,T>` of these types, plus nullable references.
+`Void` represents completion without a result. Other DTO types, arrays, cycles,
+unresolved generic types and polymorphic object graphs are rejected at build time.
+The generated clients and server operations contain fixed types; the peer cannot
+supply class names to select a deserializer. Jackson annotation interpretation and
+default polymorphic typing are disabled in the dedicated remoting mapper. DTO
+reflection metadata is registered for native images; native execution has not
+been verified by the JVM integration suite.
+
+```properties
+# Defaults, in milliseconds/bytes/requests:
+quacomo.remote.timeout-ms=10000
+quacomo.remote.max-payload-bytes=1048576
+quacomo.remote.max-in-flight=128
+# Also bound HTTP request buffering before the endpoint parses its body:
+quarkus.http.limits.max-body-size=1M
+```
+
+The client has a five-second connection timeout and no automatic redirects.
+Request/response payloads and outstanding outbound/inbound operations are bounded.
+An inbound slot remains occupied until the handler stage finishes, including if
+the caller disconnects. Blocking remote implementations run on a worker thread.
+Handlers and singleton components must support concurrent invocations.
+
+### Verification
+
+`mvn verify` runs core regression tests, remoting validation/injection tests, and
+packages an integration fixture that launches **two independent JVMs over TCP**.
+The fixture verifies remote service results and process IDs, nested JSON DTOs,
+inherited/overloaded methods, nulls, event fan-out, authentication, unknown
+operations, execution failures, timeouts and receiver shutdown. Its processes are
+stopped after the test; logs are under `remoting/integration-tests/target/`.

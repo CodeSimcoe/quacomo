@@ -15,4 +15,9 @@ import jakarta.inject.Qualifier;
 @Target({ElementType.FIELD, ElementType.TYPE})
 @Qualifier
 public @interface ProducedComponentEvents {
+  /**
+   * Named remote destination(s); empty means local delivery.
+   */
+  @jakarta.enterprise.util.Nonbinding
+  String remote() default "";
 }

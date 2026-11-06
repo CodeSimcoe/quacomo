@@ -10,6 +10,9 @@
     <modules>
         <module>deployment</module>
         <module>runtime</module>
+        <module>remoting/runtime</module>
+        <module>remoting/deployment</module>
+        <module>remoting/integration-tests</module>
     </modules>
 
     <properties>

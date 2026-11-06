@@ -10,6 +10,6 @@ public final class ComponentInstances {
   }
 
   public static <T> T get(Class<T> type) {
-    return Arc.container().instance(type).get();
+    return Arc.container().instance(type, jakarta.enterprise.inject.Any.Literal.INSTANCE).get();
   }
 }
